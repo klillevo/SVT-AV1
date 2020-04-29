@@ -613,6 +613,285 @@ void recon_output(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) {
     eb_release_mutex(encode_context_ptr->total_number_of_recon_frame_mutex);
 }
 
+//************************************/
+// Calculate Frame SSIM
+/************************************/
+
+void aom_ssim_parms_8x8_c(const uint8_t *s, int sp, const uint8_t *r, int rp,
+                          uint32_t *sum_s, uint32_t *sum_r, uint32_t *sum_sq_s,
+                          uint32_t *sum_sq_r, uint32_t *sum_sxr) {
+  int i, j;
+  for (i = 0; i < 8; i++, s += sp, r += rp) {
+    for (j = 0; j < 8; j++) {
+      *sum_s += s[j];
+      *sum_r += r[j];
+      *sum_sq_s += s[j] * s[j];
+      *sum_sq_r += r[j] * r[j];
+      *sum_sxr += s[j] * r[j];
+    }
+  }
+}
+
+void aom_highbd_ssim_parms_8x8_c(const uint8_t *s, int sp, const uint8_t *sinc, int spinc, const uint16_t *r,
+                                 int rp, uint32_t *sum_s, uint32_t *sum_r,
+                                 uint32_t *sum_sq_s, uint32_t *sum_sq_r,
+                                 uint32_t *sum_sxr) {
+  int i, j;
+  uint32_t ss;
+  for (i = 0; i < 8; i++, s += sp, sinc += spinc, r += rp) {
+    for (j = 0; j < 8; j++) {
+      ss = (int64_t)(s[j] << 2) + ((sinc[j]>>6)&0x3);
+      *sum_s += ss;
+      *sum_r += r[j];
+      *sum_sq_s += ss * ss;
+      *sum_sq_r += r[j] * r[j];
+      *sum_sxr += ss * r[j];
+    }
+  }
+}
+
+static const int64_t cc1 = 26634;        // (64^2*(.01*255)^2
+static const int64_t cc2 = 239708;       // (64^2*(.03*255)^2
+static const int64_t cc1_10 = 428658;    // (64^2*(.01*1023)^2
+static const int64_t cc2_10 = 3857925;   // (64^2*(.03*1023)^2
+static const int64_t cc1_12 = 6868593;   // (64^2*(.01*4095)^2
+static const int64_t cc2_12 = 61817334;  // (64^2*(.03*4095)^2
+
+static double similarity(uint32_t sum_s, uint32_t sum_r, uint32_t sum_sq_s,
+                         uint32_t sum_sq_r, uint32_t sum_sxr, int count,
+                         uint32_t bd) {
+  int64_t ssim_n, ssim_d;
+  int64_t c1, c2;
+
+  if (bd == 8) {
+    // scale the constants by number of pixels
+    c1 = (cc1 * count * count) >> 12;
+    c2 = (cc2 * count * count) >> 12;
+  } else if (bd == 10) {
+    c1 = (cc1_10 * count * count) >> 12;
+    c2 = (cc2_10 * count * count) >> 12;
+  } else if (bd == 12) {
+    c1 = (cc1_12 * count * count) >> 12;
+    c2 = (cc2_12 * count * count) >> 12;
+  } else {
+    c1 = c2 = 0;
+    assert(0);
+  }
+
+  ssim_n = ((int64_t)2 * sum_s * sum_r + c1) *
+           ((int64_t)2 * count * sum_sxr - (int64_t)2 * sum_s * sum_r + c2);
+
+  ssim_d = ((int64_t)sum_s * sum_s + (int64_t)sum_r * sum_r + c1) *
+           ((int64_t)count * sum_sq_s - (int64_t)sum_s * sum_s +
+            (int64_t)count * sum_sq_r - (int64_t)sum_r * sum_r + c2);
+
+  return ssim_n * 1.0 / ssim_d;
+}
+
+static double ssim_8x8(const uint8_t *s, int sp, const uint8_t *r, int rp) {
+  uint32_t sum_s = 0, sum_r = 0, sum_sq_s = 0, sum_sq_r = 0, sum_sxr = 0;
+  aom_ssim_parms_8x8_c(s, sp, r, rp, &sum_s, &sum_r, &sum_sq_s, &sum_sq_r, &sum_sxr);
+  return similarity(sum_s, sum_r, sum_sq_s, sum_sq_r, sum_sxr, 64, 8);
+}
+
+static double highbd_ssim_8x8(const uint8_t *s, int sp, const uint8_t *sinc, int spinc, const uint16_t *r,
+                              int rp, uint32_t bd, uint32_t shift) {
+  uint32_t sum_s = 0, sum_r = 0, sum_sq_s = 0, sum_sq_r = 0, sum_sxr = 0;
+  aom_highbd_ssim_parms_8x8_c(s, sp, sinc, spinc, r, rp, &sum_s, &sum_r, &sum_sq_s, &sum_sq_r, &sum_sxr);
+  return similarity(sum_s >> shift, sum_r >> shift, sum_sq_s >> (2 * shift),
+                    sum_sq_r >> (2 * shift), sum_sxr >> (2 * shift), 64, bd);
+}
+
+// We are using a 8x8 moving window with starting location of each 8x8 window
+// on the 4x4 pixel grid. Such arrangement allows the windows to overlap
+// block boundaries to penalize blocking artifacts.
+static double aom_ssim2(const uint8_t *img1, int stride_img1,
+                        const uint8_t *img2, int stride_img2,
+                        int width, int height) {
+    int i, j;
+    int samples = 0;
+    double ssim_total = 0;
+
+    // sample point start with each 4x4 location
+    for (i = 0; i <= height - 8;
+        i += 4, img1 += stride_img1 * 4, img2 += stride_img2 * 4) {
+        for (j = 0; j <= width - 8; j += 4) {
+            double v = ssim_8x8(img1 + j, stride_img1, img2 + j, stride_img2);
+            ssim_total += v;
+            samples++;
+        }
+    }
+    ssim_total /= samples;
+    return ssim_total;
+}
+
+static double aom_highbd_ssim2(const uint8_t *img1, int stride_img1,
+                               const uint8_t *img1inc, int stride_img1inc,
+                               const uint16_t *img2, int stride_img2,
+                               int width, int height, uint32_t bd, uint32_t shift) {
+  int i, j;
+  int samples = 0;
+  double ssim_total = 0;
+
+  // sample point start with each 4x4 location
+  for (i = 0; i <= height - 8;
+       i += 4, img1 += stride_img1 * 4, img1inc += stride_img1inc * 4, img2 += stride_img2 * 4) {
+    for (j = 0; j <= width - 8; j += 4) {
+      double v = highbd_ssim_8x8((img1 + j), stride_img1,
+                                 (img1inc + j), stride_img1inc,
+                                 (img2 + j), stride_img2, bd,
+                                 shift);
+      ssim_total += v;
+      samples++;
+    }
+  }
+  ssim_total /= samples;
+  return ssim_total;
+}
+
+void ssim_calculations(
+    PictureControlSet    *pcs_ptr,
+    SequenceControlSet   *scs_ptr){
+    EbBool is16bit = (scs_ptr->static_config.encoder_bit_depth > EB_8BIT);
+
+    if (!is16bit) {
+        EbPictureBufferDesc *recon_ptr;
+
+        if (pcs_ptr->parent_pcs_ptr->is_used_as_reference_flag == EB_TRUE)
+            recon_ptr = ((EbReferenceObject*)pcs_ptr->parent_pcs_ptr->reference_picture_wrapper_ptr->object_ptr)->reference_picture;
+        else
+            recon_ptr = pcs_ptr->recon_picture_ptr;
+
+        EbPictureBufferDesc *input_picture_ptr = (EbPictureBufferDesc*)pcs_ptr->parent_pcs_ptr->enhanced_picture_ptr;
+
+        EbByte  inputBuffer;
+        EbByte  reconCoeffBuffer;
+
+        EbByte buffer_y;
+        EbByte buffer_cb;
+        EbByte buffer_cr;
+
+        double luma_ssim = 0.0;
+        double cb_ssim = 0.0;
+        double cr_ssim = 0.0;
+
+        // if current source picture was temporally filtered, use an alternative buffer which stores
+        // the original source picture
+        if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE){
+            buffer_y = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_ptr[0];
+            buffer_cb = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_ptr[1];
+            buffer_cr = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_ptr[2];
+        }
+        else {
+            buffer_y = input_picture_ptr->buffer_y;
+            buffer_cb = input_picture_ptr->buffer_cb;
+            buffer_cr = input_picture_ptr->buffer_cr;
+        }
+
+        reconCoeffBuffer = &((recon_ptr->buffer_y)[recon_ptr->origin_x + recon_ptr->origin_y * recon_ptr->stride_y]);
+        inputBuffer = &(buffer_y[input_picture_ptr->origin_x + input_picture_ptr->origin_y * input_picture_ptr->stride_y]);
+        luma_ssim = aom_ssim2(inputBuffer, input_picture_ptr->stride_y, reconCoeffBuffer, recon_ptr->stride_y, scs_ptr->seq_header.max_frame_width, scs_ptr->seq_header.max_frame_height);
+
+        reconCoeffBuffer = &((recon_ptr->buffer_cb)[recon_ptr->origin_x / 2 + recon_ptr->origin_y / 2 * recon_ptr->stride_cb]);
+        inputBuffer = &(buffer_cb[input_picture_ptr->origin_x / 2 + input_picture_ptr->origin_y / 2 * input_picture_ptr->stride_cb]);
+        cb_ssim = aom_ssim2(inputBuffer, input_picture_ptr->stride_cb, reconCoeffBuffer, recon_ptr->stride_cb, scs_ptr->chroma_width, scs_ptr->chroma_height);
+
+        reconCoeffBuffer = &((recon_ptr->buffer_cr)[recon_ptr->origin_x / 2 + recon_ptr->origin_y / 2 * recon_ptr->stride_cr]);
+        inputBuffer = &(buffer_cr[input_picture_ptr->origin_x / 2 + input_picture_ptr->origin_y / 2 * input_picture_ptr->stride_cr]);
+        cr_ssim = aom_ssim2(inputBuffer, input_picture_ptr->stride_cr, reconCoeffBuffer, recon_ptr->stride_cr, scs_ptr->chroma_width, scs_ptr->chroma_height);
+
+        pcs_ptr->parent_pcs_ptr->luma_ssim = luma_ssim;
+        pcs_ptr->parent_pcs_ptr->cb_ssim = cb_ssim;
+        pcs_ptr->parent_pcs_ptr->cr_ssim = cr_ssim;
+
+        if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+            EB_FREE_ARRAY(buffer_y);
+            EB_FREE_ARRAY(buffer_cb);
+            EB_FREE_ARRAY(buffer_cr);
+        }
+    }
+    else {
+      EbPictureBufferDesc *recon_ptr;
+
+        if (pcs_ptr->parent_pcs_ptr->is_used_as_reference_flag == EB_TRUE)
+            recon_ptr = ((EbReferenceObject*)pcs_ptr->parent_pcs_ptr->reference_picture_wrapper_ptr->object_ptr)->reference_picture16bit;
+        else
+            recon_ptr = pcs_ptr->recon_picture16bit_ptr;
+        EbPictureBufferDesc *input_picture_ptr = (EbPictureBufferDesc*)pcs_ptr->parent_pcs_ptr->enhanced_picture_ptr;
+
+        EbByte  inputBuffer;
+        EbByte  inputBufferBitInc;
+        uint16_t*  reconCoeffBuffer;
+
+        double luma_ssim = 0.0;
+        double cb_ssim = 0.0;
+        double cr_ssim = 0.0;
+
+        if (scs_ptr->static_config.ten_bit_format == 1) {
+            printf("10-bit compressed format not yet supported");
+            assert(1);
+        }
+        else {
+            reconCoeffBuffer = (uint16_t*)(&((recon_ptr->buffer_y)[(recon_ptr->origin_x << is16bit) + (recon_ptr->origin_y << is16bit) * recon_ptr->stride_y]));
+
+            // if current source picture was temporally filtered, use an alternative buffer which stores
+            // the original source picture
+            EbByte buffer_y, buffer_bit_inc_y;
+            EbByte buffer_cb, buffer_bit_inc_cb;
+            EbByte buffer_cr, buffer_bit_inc_cr;
+            int bd, shift;
+
+            if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE){
+                buffer_y = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_ptr[0];
+                buffer_bit_inc_y = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_bit_inc_ptr[0];
+                buffer_cb = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_ptr[1];
+                buffer_bit_inc_cb = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_bit_inc_ptr[1];
+                buffer_cr = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_ptr[2];
+                buffer_bit_inc_cr = pcs_ptr->parent_pcs_ptr->save_enhanced_picture_bit_inc_ptr[2];
+            }else{
+                buffer_y = input_picture_ptr->buffer_y;
+                buffer_bit_inc_y = input_picture_ptr->buffer_bit_inc_y;
+                buffer_cb = input_picture_ptr->buffer_cb;
+                buffer_bit_inc_cb = input_picture_ptr->buffer_bit_inc_cb;
+                buffer_cr = input_picture_ptr->buffer_cr;
+                buffer_bit_inc_cr = input_picture_ptr->buffer_bit_inc_cr;
+            }
+
+            bd = 10;
+            shift = 0 ; // both input and output are 10 bit (bitdepth - input_bd)
+
+            inputBuffer = &((buffer_y)[input_picture_ptr->origin_x + input_picture_ptr->origin_y * input_picture_ptr->stride_y]);
+            inputBufferBitInc = &((buffer_bit_inc_y)[input_picture_ptr->origin_x + input_picture_ptr->origin_y * input_picture_ptr->stride_bit_inc_y]);
+            luma_ssim = aom_highbd_ssim2(inputBuffer, input_picture_ptr->stride_y, inputBufferBitInc, input_picture_ptr->stride_bit_inc_y, reconCoeffBuffer, recon_ptr->stride_y, scs_ptr->seq_header.max_frame_width, scs_ptr->seq_header.max_frame_height, bd, shift);
+            if (luma_ssim > 1.0) printf ("luma_ssim: %f ERROR\n", luma_ssim);
+
+            reconCoeffBuffer = (uint16_t*)(&((recon_ptr->buffer_cb)[(recon_ptr->origin_x << is16bit) / 2 + (recon_ptr->origin_y << is16bit) / 2 * recon_ptr->stride_cb]));
+            inputBuffer = &((buffer_cb)[input_picture_ptr->origin_x / 2 + input_picture_ptr->origin_y / 2 * input_picture_ptr->stride_cb]);
+            inputBufferBitInc = &((buffer_bit_inc_cb)[input_picture_ptr->origin_x / 2 + input_picture_ptr->origin_y / 2 * input_picture_ptr->stride_bit_inc_cb]);
+            cb_ssim = aom_highbd_ssim2(inputBuffer, input_picture_ptr->stride_cb, inputBufferBitInc, input_picture_ptr->stride_bit_inc_cb, reconCoeffBuffer, recon_ptr->stride_cb, scs_ptr->chroma_width, scs_ptr->chroma_height, bd, shift);
+
+            reconCoeffBuffer = (uint16_t*)(&((recon_ptr->buffer_cr)[(recon_ptr->origin_x << is16bit) / 2 + (recon_ptr->origin_y << is16bit) / 2 * recon_ptr->stride_cr]));
+            inputBuffer = &((buffer_cr)[input_picture_ptr->origin_x / 2 + input_picture_ptr->origin_y / 2 * input_picture_ptr->stride_cr]);
+            inputBufferBitInc = &((buffer_bit_inc_cr)[input_picture_ptr->origin_x / 2 + input_picture_ptr->origin_y / 2 * input_picture_ptr->stride_bit_inc_cr]);
+            cr_ssim = aom_highbd_ssim2(inputBuffer, input_picture_ptr->stride_cr, inputBufferBitInc, input_picture_ptr->stride_bit_inc_cr, reconCoeffBuffer, recon_ptr->stride_cr, scs_ptr->chroma_width, scs_ptr->chroma_height, bd, shift);
+
+            pcs_ptr->parent_pcs_ptr->luma_ssim = luma_ssim;
+            pcs_ptr->parent_pcs_ptr->cb_ssim = cb_ssim;
+            pcs_ptr->parent_pcs_ptr->cr_ssim = cr_ssim;
+
+            if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+                EB_FREE_ARRAY(buffer_y);
+                EB_FREE_ARRAY(buffer_cb);
+                EB_FREE_ARRAY(buffer_cr);
+                EB_FREE_ARRAY(buffer_bit_inc_y);
+                EB_FREE_ARRAY(buffer_bit_inc_cb);
+                EB_FREE_ARRAY(buffer_bit_inc_cr);
+            }
+        }
+    }
+
+}
+
 void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) {
     EbBool is_16bit = (scs_ptr->static_config.encoder_bit_depth > EB_8BIT);
 
@@ -726,12 +1005,14 @@ void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) 
         pcs_ptr->parent_pcs_ptr->cb_sse   = (uint32_t)sse_total[1];
         pcs_ptr->parent_pcs_ptr->cr_sse   = (uint32_t)sse_total[2];
 
-        if (pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+        //Freed at SSIM calculation
+        /* if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
             EB_FREE_ARRAY(buffer_y);
             EB_FREE_ARRAY(buffer_cb);
             EB_FREE_ARRAY(buffer_cr);
-        }
-    } else {
+        } */
+    }
+    else {
         EbPictureBufferDesc *recon_ptr;
 
         if (pcs_ptr->parent_pcs_ptr->is_used_as_reference_flag == EB_TRUE)
@@ -1085,14 +1366,14 @@ void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) 
 
             sse_total[2] = residual_distortion;
 
-            if (pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+           /* if (pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
                 EB_FREE_ARRAY(buffer_y);
                 EB_FREE_ARRAY(buffer_cb);
                 EB_FREE_ARRAY(buffer_cr);
                 EB_FREE_ARRAY(buffer_bit_inc_y);
                 EB_FREE_ARRAY(buffer_bit_inc_cb);
                 EB_FREE_ARRAY(buffer_bit_inc_cr);
-            }
+            } */ // freed in ssim_calculations */
         }
 
         pcs_ptr->parent_pcs_ptr->luma_sse = (uint32_t)sse_total[0];

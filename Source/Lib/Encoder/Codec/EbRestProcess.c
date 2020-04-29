@@ -56,6 +56,7 @@ void eb_av1_loop_restoration_filter_frame(Yv12BufferConfig *frame, Av1Common *cm
                                           int32_t optimized_lr);
 void copy_statistics_to_ref_obj_ect(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr);
 void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr);
+void ssim_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr);
 void pad_ref_and_set_flags(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr);
 void generate_padding(EbByte src_pic, uint32_t src_stride, uint32_t original_src_width,
                       uint32_t original_src_height, uint32_t padding_width,
@@ -480,6 +481,7 @@ void eb_av1_superres_upscale_frame(struct Av1Common *cm,
  ******************************************************/
 void *rest_kernel(void *input_ptr) {
     // Context & SCS & PCS
+
     EbThreadContext *   thread_context_ptr = (EbThreadContext *)input_ptr;
     RestContext *       context_ptr        = (RestContext *)thread_context_ptr->priv;
     PictureControlSet * pcs_ptr;
@@ -587,8 +589,9 @@ void *rest_kernel(void *input_ptr) {
                 copy_statistics_to_ref_obj_ect(pcs_ptr, scs_ptr);
             }
 
-            // PSNR Calculation
+            // PSNR and SSIM Calculation
             if (scs_ptr->static_config.stat_report) psnr_calculations(pcs_ptr, scs_ptr);
+            if (scs_ptr->static_config.stat_report) ssim_calculations(pcs_ptr, scs_ptr);
 
             // Pad the reference picture and set ref POC
             if (pcs_ptr->parent_pcs_ptr->is_used_as_reference_flag == EB_TRUE)
