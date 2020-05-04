@@ -916,7 +916,7 @@ void ssim_calculations(
                             four_2bit_pels = input_buffer_bit_inc[k + j * inn_stride];
                             ibu[4*k  ] = (four_2bit_pels     ) & 0xc0;
                             ibu[4*k+1] = (four_2bit_pels << 2) & 0xc0;
-                            ibu[8*k+2] = (four_2bit_pels << 4) & 0xc0;
+                            ibu[4*k+2] = (four_2bit_pels << 4) & 0xc0;
                             ibu[4*k+3] = (four_2bit_pels << 6) & 0xc0;
                         }
                         ibu += 64;
@@ -952,7 +952,7 @@ void ssim_calculations(
                             four_2bit_pels = input_buffer_bit_inc[k + j * inn_stride];
                             ibu[4*k  ] = (four_2bit_pels     ) & 0xc0;
                             ibu[4*k+1] = (four_2bit_pels << 2) & 0xc0;
-                            ibu[8*k+2] = (four_2bit_pels << 4) & 0xc0;
+                            ibu[4*k+2] = (four_2bit_pels << 4) & 0xc0;
                             ibu[4*k+3] = (four_2bit_pels << 6) & 0xc0;
                         }
                         ibu += 64;
@@ -976,7 +976,7 @@ void ssim_calculations(
                             four_2bit_pels = input_buffer_bit_inc[k + j * inn_stride];
                             ibu[4*k  ] = (four_2bit_pels     ) & 0xc0;
                             ibu[4*k+1] = (four_2bit_pels << 2) & 0xc0;
-                            ibu[8*k+2] = (four_2bit_pels << 4) & 0xc0;
+                            ibu[4*k+2] = (four_2bit_pels << 4) & 0xc0;
                             ibu[4*k+3] = (four_2bit_pels << 6) & 0xc0;
                         }
                         ibu += 64;
