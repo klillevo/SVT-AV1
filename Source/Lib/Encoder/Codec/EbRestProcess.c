@@ -533,6 +533,8 @@ void *rest_kernel(void *input_ptr) {
 
     timestamp_t start_time, stop_time;
     double psnr_time, ssim_time;
+    static double total_psnr_time = 0., total_ssim_time = 0.;
+    static int num_images = 0;
 
     for (;;) {
         // Get Cdef Results
@@ -633,12 +635,17 @@ void *rest_kernel(void *input_ptr) {
                 psnr_calculations(pcs_ptr, scs_ptr);
                 get_time(&stop_time);
                 psnr_time = elapsed_time(&start_time, &stop_time);
+                total_psnr_time += psnr_time;
 
                 get_time(&start_time);
                 ssim_calculations(pcs_ptr, scs_ptr);
                 get_time(&stop_time);
                 ssim_time = elapsed_time(&start_time, &stop_time);
-                printf("psnr time: %.5f  ssim time: %.5f\n", psnr_time, ssim_time);
+                total_ssim_time += ssim_time;
+                num_images++;
+
+                printf("psnr time: %.5f / %.5f ssim time: %.5f / %.5f\n", 
+                        psnr_time, total_psnr_time/(float)num_images, ssim_time, total_ssim_time/(float)num_images);
             }
 
             // Pad the reference picture and set ref POC
