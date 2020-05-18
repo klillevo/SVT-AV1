@@ -749,9 +749,7 @@ static double aom_highbd_ssim2(const uint8_t *img1, int stride_img1,
   return ssim_total;
 }
 
-void ssim_calculations(
-    PictureControlSet    *pcs_ptr,
-    SequenceControlSet   *scs_ptr){
+void ssim_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr, EbBool free_memory) {
     EbBool is_16bit = (scs_ptr->static_config.encoder_bit_depth > EB_8BIT);
 
     const uint32_t ss_x = scs_ptr->subsampling_x;
@@ -810,7 +808,7 @@ void ssim_calculations(
         pcs_ptr->parent_pcs_ptr->cb_ssim = cb_ssim;
         pcs_ptr->parent_pcs_ptr->cr_ssim = cr_ssim;
 
-        if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+        if (free_memory && pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
             EB_FREE_ARRAY(buffer_y);
             EB_FREE_ARRAY(buffer_cb);
             EB_FREE_ARRAY(buffer_cr);
@@ -1045,7 +1043,7 @@ void ssim_calculations(
             pcs_ptr->parent_pcs_ptr->cb_ssim = cb_ssim;
             pcs_ptr->parent_pcs_ptr->cr_ssim = cr_ssim;
 
-            if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+            if (free_memory && pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
                 EB_FREE_ARRAY(buffer_y);
                 EB_FREE_ARRAY(buffer_cb);
                 EB_FREE_ARRAY(buffer_cr);
@@ -1058,7 +1056,7 @@ void ssim_calculations(
 
 }
 
-void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) {
+void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr, EbBool free_memory) {
     EbBool is_16bit = (scs_ptr->static_config.encoder_bit_depth > EB_8BIT);
 
     const uint32_t ss_x = scs_ptr->subsampling_x;
@@ -1171,12 +1169,11 @@ void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) 
         pcs_ptr->parent_pcs_ptr->cb_sse   = (uint32_t)sse_total[1];
         pcs_ptr->parent_pcs_ptr->cr_sse   = (uint32_t)sse_total[2];
 
-        //Freed at SSIM calculation
-        /* if(pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+        if(free_memory && pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
             EB_FREE_ARRAY(buffer_y);
             EB_FREE_ARRAY(buffer_cb);
             EB_FREE_ARRAY(buffer_cr);
-        } */
+        }
     }
     else {
         EbPictureBufferDesc *recon_ptr;
@@ -1532,15 +1529,13 @@ void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) 
 
             sse_total[2] = residual_distortion;
 
-           // freed in ssim_calculations()
-           /* if (pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
+            if (free_memory && pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
                 EB_FREE_ARRAY(buffer_y);
                 EB_FREE_ARRAY(buffer_cb);
                 EB_FREE_ARRAY(buffer_cr);
                 EB_FREE_ARRAY(buffer_bit_inc_y);
                 EB_FREE_ARRAY(buffer_bit_inc_cb);
-                EB_FREE_ARRAY(buffer_bit_inc_cr);
-            } */
+           }
         }
 
         pcs_ptr->parent_pcs_ptr->luma_sse = (uint32_t)sse_total[0];
