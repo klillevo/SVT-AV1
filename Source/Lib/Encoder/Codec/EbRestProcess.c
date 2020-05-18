@@ -481,7 +481,6 @@ void eb_av1_superres_upscale_frame(struct Av1Common *cm,
  ******************************************************/
 void *rest_kernel(void *input_ptr) {
     // Context & SCS & PCS
-
     EbThreadContext *   thread_context_ptr = (EbThreadContext *)input_ptr;
     RestContext *       context_ptr        = (RestContext *)thread_context_ptr->priv;
     PictureControlSet * pcs_ptr;
