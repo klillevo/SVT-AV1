@@ -1532,6 +1532,7 @@ void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) 
 
             sse_total[2] = residual_distortion;
 
+           // freed in ssim_calculations()
            /* if (pcs_ptr->parent_pcs_ptr->temporal_filtering_on == EB_TRUE) {
                 EB_FREE_ARRAY(buffer_y);
                 EB_FREE_ARRAY(buffer_cb);
@@ -1539,7 +1540,7 @@ void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr) 
                 EB_FREE_ARRAY(buffer_bit_inc_y);
                 EB_FREE_ARRAY(buffer_bit_inc_cb);
                 EB_FREE_ARRAY(buffer_bit_inc_cr);
-            } */ // freed in ssim_calculations */
+            } */
         }
 
         pcs_ptr->parent_pcs_ptr->luma_sse = (uint32_t)sse_total[0];

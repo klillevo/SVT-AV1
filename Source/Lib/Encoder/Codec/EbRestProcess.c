@@ -590,8 +590,13 @@ void *rest_kernel(void *input_ptr) {
             }
 
             // PSNR and SSIM Calculation
-            if (scs_ptr->static_config.stat_report) psnr_calculations(pcs_ptr, scs_ptr);
-            if (scs_ptr->static_config.stat_report) ssim_calculations(pcs_ptr, scs_ptr);
+            // (note: memory is freed in ssim_calculations, so this needs to be called last.
+            //  If one wants to skip ssim_calculations, comment back in memory free calls at
+            //  end of psnr_calculations.)
+            if (scs_ptr->static_config.stat_report) {
+                psnr_calculations(pcs_ptr, scs_ptr);
+                ssim_calculations(pcs_ptr, scs_ptr);
+            }
 
             // Pad the reference picture and set ref POC
             if (pcs_ptr->parent_pcs_ptr->is_used_as_reference_flag == EB_TRUE)
