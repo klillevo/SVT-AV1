@@ -15,6 +15,7 @@
 */
 
 #include <stdlib.h>
+#include <time.h>
 
 #include "EbEncHandle.h"
 #include "EbRestProcess.h"
@@ -475,6 +476,37 @@ void eb_av1_superres_upscale_frame(struct Av1Common *cm,
     EB_FREE_ALIGNED_ARRAY(ps_recon_pic_temp->buffer_cr);
 
 }
+/* time record */
+typedef union {
+  struct timespec time_spec;
+  long long cpu_counter;
+} timestamp_t;
+
+/*!
+ *  \brief Read system time
+ *
+ *  \param[out]  t   - pointer to timestamp_t structure to contain record of system time
+ */
+void get_time (timestamp_t *t)
+{
+  clock_gettime(CLOCK_REALTIME, (struct timespec*)&t->time_spec);
+}
+
+/*!
+ *  \brief  Compute elapsed time between two events.
+ *
+ *  \param[in]  start  - start time
+ *  \param[in]  end    - end time
+ *
+ *  \returns    elapsed time [in milliseconds]
+ */
+double elapsed_time (timestamp_t *start, timestamp_t *end)
+{
+  time_t sec  = end->time_spec.tv_sec - start->time_spec.tv_sec;
+  long   nsec = end->time_spec.tv_nsec - start->time_spec.tv_nsec;
+  if (nsec < 0) {sec --; nsec += 1000000000;}
+  return (double)sec + (double)nsec / 1000000000.;
+}
 
 /******************************************************
  * Rest Kernel
@@ -498,6 +530,9 @@ void *rest_kernel(void *input_ptr) {
     EbObjectWrapper *    picture_demux_results_wrapper_ptr;
     PictureDemuxResults *picture_demux_results_rtr;
     // SB Loop variables
+
+    timestamp_t start_time, stop_time;
+    double psnr_time, ssim_time;
 
     for (;;) {
         // Get Cdef Results
@@ -594,8 +629,16 @@ void *rest_kernel(void *input_ptr) {
             //  If one wants to skip ssim_calculations, comment back in memory free calls at
             //  end of psnr_calculations.)
             if (scs_ptr->static_config.stat_report) {
+                get_time(&start_time);
                 psnr_calculations(pcs_ptr, scs_ptr);
+                get_time(&stop_time);
+                psnr_time = elapsed_time(&start_time, &stop_time);
+
+                get_time(&start_time);
                 ssim_calculations(pcs_ptr, scs_ptr);
+                get_time(&stop_time);
+                ssim_time = elapsed_time(&start_time, &stop_time);
+                printf("psnr time: %.5f  ssim time: %.5f\n", psnr_time, ssim_time);
             }
 
             // Pad the reference picture and set ref POC
