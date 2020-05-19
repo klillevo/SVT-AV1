@@ -1535,6 +1535,7 @@ void psnr_calculations(PictureControlSet *pcs_ptr, SequenceControlSet *scs_ptr, 
                 EB_FREE_ARRAY(buffer_cr);
                 EB_FREE_ARRAY(buffer_bit_inc_y);
                 EB_FREE_ARRAY(buffer_bit_inc_cb);
+                EB_FREE_ARRAY(buffer_bit_inc_cr);
            }
         }
 
